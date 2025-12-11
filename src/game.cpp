@@ -945,7 +945,7 @@ private:
         rasterizer.polygonMode = VK_POLYGON_MODE_FILL; 
         rasterizer.lineWidth = 1.0f;
         rasterizer.cullMode = VK_CULL_MODE_NONE;
-        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
         rasterizer.depthBiasEnable = VK_FALSE;
 
         VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -1988,7 +1988,8 @@ private:
         UniformBufferObject ubo{};
          
         glm::mat4 modelMatrix = glm::mat4(1.0f);  
-        modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, -250.0f, 0.0f));
+        modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, -250.0f, 0.0f)); 
+        modelMatrix = glm::rotate(modelMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f)); 
         ubo.model = modelMatrix;
          
         glm::vec3 camPos = cameraPos; 
