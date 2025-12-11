@@ -945,7 +945,7 @@ private:
         rasterizer.polygonMode = VK_POLYGON_MODE_FILL; 
         rasterizer.lineWidth = 1.0f;
         rasterizer.cullMode = VK_CULL_MODE_NONE;
-        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterizer.depthBiasEnable = VK_FALSE;
 
         VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -1356,69 +1356,214 @@ private:
     void loadModel()
     {
         std::ifstream file(MODEL_PATH);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             throw std::runtime_error("failed to open .byu file!");
         }
 
-        int nParts, nPoints;
-        file >> nParts >> nPoints;
- 
-        std::vector<glm::vec3> rawVertices(nPoints);
-        
-        std::vector<glm::vec3> accumNormals(nPoints, glm::vec3(0.0f));
-
-        for (int i = 0; i < nPoints; ++i) {
-            file >> rawVertices[i].x >> rawVertices[i].y >> rawVertices[i].z;
+        std::string headerLine;
+        std::getline(file, headerLine);
+        if (headerLine.empty() && file.good())
+        {
+            std::getline(file, headerLine);
         }
- 
+
+        std::istringstream headerStream(headerLine);
+        std::vector<int> headerInts;
+        {
+            int val = 0;
+            while (headerStream >> val)
+            {
+                headerInts.push_back(val);
+            }
+        }
+
+        if (headerInts.size() != 2 && headerInts.size() != 4)
+        {
+            throw std::runtime_error("Unsupported .byu header: expected 2 or 4 integers on the first line");
+        }
+
+        int nVerts = 0;
+        int expectedTriangles = -1;
+        int nParts = 0;
+        int nPolys = 0;
+        int nConns = 0;
+
+        if (headerInts.size() == 2)
+        {
+            // Project's variant: "nVerts nTris" then nVerts vertex lines, then triangles as 1-based triplets.
+            nVerts = headerInts[0];
+            expectedTriangles = headerInts[1];
+        }
+        else
+        {
+            // MOVIE.BYU classic: "nParts nVerts nPolys nConns" + part ranges, vertices, then connectivity with negatives.
+            nParts = headerInts[0];
+            nVerts = headerInts[1];
+            nPolys = headerInts[2];
+            nConns = headerInts[3];
+
+            // Most MOVIE.BYU files provide 2 integers per part (start/end polygon indices).
+            // We don't need these ranges for rendering, but we must consume them to align the stream.
+            for (int i = 0; i < nParts; ++i)
+            {
+                int startPoly = 0;
+                int endPoly = 0;
+                if (!(file >> startPoly >> endPoly))
+                {
+                    throw std::runtime_error("Failed to read MOVIE.BYU part ranges");
+                }
+            }
+        }
+
+        if (nVerts <= 0)
+        {
+            throw std::runtime_error("Invalid vertex count in .byu header");
+        }
+
+        std::vector<glm::vec3> rawVertices(static_cast<size_t>(nVerts));
+        std::vector<glm::vec3> accumNormals(static_cast<size_t>(nVerts), glm::vec3(0.0f));
+
+        for (int i = 0; i < nVerts; ++i)
+        {
+            if (!(file >> rawVertices[i].x >> rawVertices[i].y >> rawVertices[i].z))
+            {
+                throw std::runtime_error("Failed to read vertex data from .byu file");
+            }
+        }
+
         std::vector<uint32_t> rawIndices;
-        int idx;
-         
-        while (file >> idx) {
-            rawIndices.push_back(std::abs(idx) - 1);
-        }
-        file.close();
- 
-        if (rawIndices.size() % 3 != 0) {
-            throw std::runtime_error("Error: The file does not have a topology compatible with triangles (indices count is not divisible by 3).");
-        }
- 
-        for (size_t i = 0; i < rawIndices.size(); i += 3) {
-            uint32_t i0 = rawIndices[i];
-            uint32_t i1 = rawIndices[i + 1]; 
-            uint32_t i2 = rawIndices[i + 2]; 
+        rawIndices.reserve(1024);
 
-            glm::vec3 v0 = rawVertices[i0];
-            glm::vec3 v1 = rawVertices[i1];
-            glm::vec3 v2 = rawVertices[i2];
+        auto addTriangle = [&](uint32_t i0, uint32_t i1, uint32_t i2)
+        {
+            if (i0 >= static_cast<uint32_t>(nVerts) || i1 >= static_cast<uint32_t>(nVerts) || i2 >= static_cast<uint32_t>(nVerts))
+            {
+                throw std::runtime_error(".byu connectivity references a vertex out of range");
+            }
+
+            rawIndices.push_back(i0);
+            rawIndices.push_back(i1);
+            rawIndices.push_back(i2);
+
+            const glm::vec3& v0 = rawVertices[i0];
+            const glm::vec3& v1 = rawVertices[i1];
+            const glm::vec3& v2 = rawVertices[i2];
 
             glm::vec3 edge1 = v1 - v0;
             glm::vec3 edge2 = v2 - v0;
- 
             glm::vec3 faceNormal = glm::cross(edge1, edge2);
- 
+
             accumNormals[i0] += faceNormal;
             accumNormals[i1] += faceNormal;
             accumNormals[i2] += faceNormal;
-        }
- 
-        vertices.clear();
-        vertices.reserve(nPoints);
+        };
 
-        for (int i = 0; i < nPoints; ++i) {
+        if (headerInts.size() == 2)
+        {
+            // Triangle list: remaining ints are triplets.
+            int a = 0, b = 0, c = 0;
+            while (file >> a >> b >> c)
+            {
+                // BYU is 1-based.
+                if (a <= 0 || b <= 0 || c <= 0)
+                {
+                    throw std::runtime_error("Invalid (non-positive) index in .byu triangle list");
+                }
+                addTriangle(static_cast<uint32_t>(a - 1), static_cast<uint32_t>(b - 1), static_cast<uint32_t>(c - 1));
+            }
+
+            if (!file.eof() && file.fail())
+            {
+                throw std::runtime_error("Failed while reading .byu triangle indices");
+            }
+
+            const int trianglesLoaded = static_cast<int>(rawIndices.size() / 3);
+            if (expectedTriangles > 0 && trianglesLoaded != expectedTriangles)
+            {
+                std::cerr << "Warning: .byu expected " << expectedTriangles << " triangles but loaded " << trianglesLoaded << std::endl;
+            }
+        }
+        else
+        {
+            // MOVIE.BYU connectivity: read nConns indices, split polygons on negative values, triangulate with fan.
+            std::vector<uint32_t> polygon;
+            polygon.reserve(8);
+
+            int readCount = 0;
+            int idx = 0;
+            while ((nConns <= 0 || readCount < nConns) && (file >> idx))
+            {
+                ++readCount;
+
+                const bool endPoly = (idx < 0);
+                const int absIdx = std::abs(idx);
+                if (absIdx <= 0)
+                {
+                    throw std::runtime_error("Invalid index in MOVIE.BYU connectivity");
+                }
+
+                polygon.push_back(static_cast<uint32_t>(absIdx - 1));
+
+                if (endPoly)
+                {
+                    if (polygon.size() >= 3)
+                    {
+                        const uint32_t i0 = polygon[0];
+                        for (size_t k = 1; k + 1 < polygon.size(); ++k)
+                        {
+                            addTriangle(i0, polygon[k], polygon[k + 1]);
+                        }
+                    }
+
+                    polygon.clear();
+                }
+            }
+
+            if (!polygon.empty())
+            {
+                std::cerr << "Warning: MOVIE.BYU connectivity ended mid-polygon; discarding trailing indices" << std::endl;
+            }
+
+            const int trianglesLoaded = static_cast<int>(rawIndices.size() / 3);
+            if (nPolys > 0)
+            {
+                std::cerr << "Info: MOVIE.BYU header nPolys=" << nPolys << ", produced triangles=" << trianglesLoaded << std::endl;
+            }
+        }
+
+        file.close();
+
+        if (rawIndices.empty())
+        {
+            throw std::runtime_error("No triangles were loaded from the .byu file");
+        }
+
+        vertices.clear();
+        vertices.reserve(static_cast<size_t>(nVerts));
+
+        for (int i = 0; i < nVerts; ++i)
+        {
             Vertex v{};
             v.pos = rawVertices[i];
- 
-            if (glm::length(accumNormals[i]) > 0.00001f) {
+
+            if (glm::length(accumNormals[i]) > 0.00001f)
+            {
                 v.normal = glm::normalize(accumNormals[i]);
-            } else {
-                v.normal = glm::vec3(0.0f, 1.0f, 0.0f); 
-            } 
+            }
+            else
+            {
+                v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+            }
 
             vertices.push_back(v);
         }
- 
+
         indices = std::move(rawIndices);
+
+        std::cout << "Loaded " << vertices.size() << " vertices" << std::endl;
+        std::cout << "Loaded " << indices.size() << " indices" << std::endl;
+        std::cout << "Triangle count: " << indices.size() / 3 << std::endl;
     }
 
     void loadParameters()
@@ -1527,6 +1672,7 @@ private:
             std::cerr << "Error loading parameters: " << e.what() << std::endl;
         }
     }
+
     void createVertexBuffer()
     {
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
@@ -1986,7 +2132,7 @@ private:
         UniformBufferObject ubo{};
          
         glm::mat4 modelMatrix = glm::mat4(1.0f);  
-        modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, -250.0f, 0.0f)); 
+        //modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, -250.0f, 0.0f)); 
         modelMatrix = glm::rotate(modelMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f)); 
         ubo.model = modelMatrix;
          
