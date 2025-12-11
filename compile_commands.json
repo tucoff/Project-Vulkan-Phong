@@ -1,0 +1,20 @@
+[
+{
+  "directory": "/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong",
+  "command": "/usr/bin/c++ -DVK_USE_PLATFORM_XCB_KHR -I/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src -O3 -DNDEBUG -std=c++17 -o CMakeFiles/VulkanGame.dir/src/game.cpp.o -c /run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src/game.cpp",
+  "file": "/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src/game.cpp",
+  "output": "CMakeFiles/VulkanGame.dir/src/game.cpp.o"
+},
+{
+  "directory": "/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong",
+  "command": "/usr/bin/c++ -DVK_USE_PLATFORM_XCB_KHR -I/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src -O3 -DNDEBUG -std=c++17 -o CMakeFiles/VulkanGame.dir/src/main.cpp.o -c /run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src/main.cpp",
+  "file": "/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src/main.cpp",
+  "output": "CMakeFiles/VulkanGame.dir/src/main.cpp.o"
+},
+{
+  "directory": "/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong",
+  "command": "/usr/bin/c++ -DVK_USE_PLATFORM_XCB_KHR -I/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src -O3 -DNDEBUG -std=c++17 -o CMakeFiles/VulkanGame.dir/src/utils.cpp.o -c /run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src/utils.cpp",
+  "file": "/run/media/tucoff/Arquivos/PROJECTS/Project-Vulkan-Phong/src/utils.cpp",
+  "output": "CMakeFiles/VulkanGame.dir/src/utils.cpp.o"
+}
+]

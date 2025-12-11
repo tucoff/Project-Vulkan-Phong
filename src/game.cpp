@@ -2,15 +2,11 @@
 
 #include "game.h"
 #include "utils.h"
-#include "compute.h"
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
 #include <unordered_map>
-#define TINYOBJLOADER_IMPLEMENTATION
-#include <tiny_obj_loader.h>
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #define GLM_FORCE_RADIANS
@@ -32,21 +28,21 @@
 #include <cstdint>
 #include <limits>
 #include <algorithm>
+#include <sstream>
 
 #pragma endregion
 
 #pragma region Constants and Global Variables
 
-const char* APP_NAME = "Game-1";
+const char* APP_NAME = "Game-1-Byu";
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 800;
 
-const std::string MODEL_PATH = "models/viking_room.obj";
-const std::string TEXTURE_PATH = "textures/viking_room.png";
+const std::string MODEL_PATH = "models/calice2.byu";
 
 const int MAX_FRAMES_IN_FLIGHT = 4;
 
-const float CAMERA_SPEED = 2.5f;
+const float CAMERA_SPEED = 300.0f;
 const float MOUSE_SENSITIVITY = 0.05f;
 
 const std::vector<const char*> validationLayers =
@@ -87,11 +83,47 @@ struct SwapChainSupportDetails
     std::vector<VkPresentModeKHR> presentModes;
 };
 
+struct CameraParams
+{
+    glm::vec3 C; 
+    glm::vec3 N; 
+    glm::vec3 V; 
+    float fovy;
+    float aspect;
+    float near;
+    float far;
+};
+
+struct LightParams
+{
+    glm::vec3 position;
+    glm::vec4 ambient;
+    glm::vec4 diffuse;
+    glm::vec4 specular;
+};
+
+struct MaterialParams
+{
+    glm::vec4 ambient;
+    glm::vec4 diffuse;
+    glm::vec4 specular;
+    float shininess;
+};
+
 struct UniformBufferObject
 {
     alignas(16) glm::mat4 model;
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
+    alignas(16) glm::vec3 lightPos;
+    alignas(16) glm::vec3 viewPos;
+    alignas(16) glm::vec4 lightAmbient;
+    alignas(16) glm::vec4 lightDiffuse;
+    alignas(16) glm::vec4 lightSpecular;
+    alignas(16) glm::vec4 matAmbient;
+    alignas(16) glm::vec4 matDiffuse;
+    alignas(16) glm::vec4 matSpecular;
+    alignas(4) float shininess;
 };
 
 #pragma endregion
@@ -101,8 +133,7 @@ struct UniformBufferObject
 struct Vertex
 {
     glm::vec3 pos;
-    glm::vec3 color;
-    glm::vec2 texCoord;
+    glm::vec3 normal;
 
     static VkVertexInputBindingDescription getBindingDescription()
     {
@@ -114,9 +145,9 @@ struct Vertex
         return bindingDescription;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions()
+    static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions()
     {
-        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
 
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
@@ -126,19 +157,14 @@ struct Vertex
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].location = 1;
         attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[1].offset = offsetof(Vertex, color);
-
-        attributeDescriptions[2].binding = 0;
-        attributeDescriptions[2].location = 2;
-        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
+        attributeDescriptions[1].offset = offsetof(Vertex, normal);
 
         return attributeDescriptions;
     }
 
     bool operator==(const Vertex& other) const
     {
-        return pos == other.pos && color == other.color && texCoord == other.texCoord;
+        return pos == other.pos && normal == other.normal;
     }
 };
 
@@ -149,8 +175,7 @@ namespace std
         size_t operator()(Vertex const& vertex) const
         {
             return ((hash<glm::vec3>()(vertex.pos) ^
-                (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
-                (hash<glm::vec2>()(vertex.texCoord) << 1);
+                (hash<glm::vec3>()(vertex.normal) << 1)) >> 1);
         }
     };
 }
@@ -158,7 +183,10 @@ namespace std
 std::vector<Vertex> vertices;
 std::vector<uint32_t> indices;
 VkBuffer vertexBuffer;
-VkDeviceMemory vertexBufferMemory;
+VkDeviceMemory vertexBufferMemory; 
+CameraParams cameraParams;
+LightParams lightParams;
+MaterialParams materialParams;
 
 #pragma endregion
 
@@ -196,10 +224,6 @@ private:
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline graphicsPipeline = VK_NULL_HANDLE;
     VkCommandPool commandPool = VK_NULL_HANDLE;
-    VkImage textureImage = VK_NULL_HANDLE;
-    VkDeviceMemory textureImageMemory = VK_NULL_HANDLE;
-    VkImageView textureImageView = VK_NULL_HANDLE;
-    VkSampler textureSampler = VK_NULL_HANDLE;
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory vertexBufferMemory = VK_NULL_HANDLE;
     VkBuffer indexBuffer = VK_NULL_HANDLE;
@@ -223,7 +247,6 @@ private:
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
     bool framebufferResized = false;
-    uint32_t mipLevels = 1;
 
     glm::vec3 cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
     glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
@@ -236,8 +259,6 @@ private:
     float lastY = HEIGHT / 2.0f;
     float deltaTime = 0.0f;
     float lastFrame = 0.0f;
-    
-    bool switchToCompute = false;
 
 #pragma endregion
 
@@ -263,8 +284,8 @@ private:
     }
 
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
-        (void)width;   // Suppress unused parameter warning
-        (void)height;  // Suppress unused parameter warning
+        (void)width;
+        (void)height;
         auto app = reinterpret_cast<Game*>(glfwGetWindowUserPointer(window));
         app->framebufferResized = true;
     }
@@ -294,11 +315,9 @@ private:
         createCommandPool();
         createColorResources();
         createDepthResources();
-        createFramebuffers();
-        createTextureImage();
-        createTextureImageView();
-        createTextureSampler();
+        createFramebuffers();        
         loadModel();
+        loadParameters();
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
@@ -413,9 +432,9 @@ private:
 
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
     {
-        (void)messageSeverity;  // Suppress unused parameter warning
-        (void)messageType;      // Suppress unused parameter warning
-        (void)pUserData;        // Suppress unused parameter warning
+        (void)messageSeverity;
+        (void)messageType;
+        (void)pUserData;
         std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
 
         return VK_FALSE;
@@ -488,7 +507,7 @@ private:
         VkPhysicalDeviceFeatures deviceFeatures;
         vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
 
-        return indices.isComplete() && extensionsSupported && swapChainAdequate && deviceFeatures.samplerAnisotropy;
+        return indices.isComplete() && extensionsSupported && swapChainAdequate;
     }
 
     bool checkDeviceExtensionSupport(VkPhysicalDevice device)
@@ -540,7 +559,6 @@ private:
         }
 
         VkPhysicalDeviceFeatures enabledFeatures = {};
-        enabledFeatures.samplerAnisotropy = VK_TRUE;
         enabledFeatures.sampleRateShading = VK_TRUE; 
 
         VkDeviceCreateInfo createInfo{};
@@ -865,18 +883,11 @@ private:
         uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         uboLayoutBinding.pImmutableSamplers = nullptr;
 
-        VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-        samplerLayoutBinding.binding = 1;
-        samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        samplerLayoutBinding.descriptorCount = 1;
-        samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        samplerLayoutBinding.pImmutableSamplers = nullptr;
-
-        VkDescriptorSetLayoutBinding bindings[] = {uboLayoutBinding, samplerLayoutBinding};
+        VkDescriptorSetLayoutBinding bindings[] = {uboLayoutBinding};
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount = 2;
+        layoutInfo.bindingCount = 1;
         layoutInfo.pBindings = bindings;
 
         if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
@@ -931,9 +942,9 @@ private:
         rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rasterizer.depthClampEnable = VK_FALSE;
         rasterizer.rasterizerDiscardEnable = VK_FALSE;
-        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL; 
         rasterizer.lineWidth = 1.0f;
-        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
         rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterizer.depthBiasEnable = VK_FALSE;
 
@@ -1153,130 +1164,6 @@ private:
         return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
     }
 
-    void createTextureImage()
-    {
-        int texWidth, texHeight, texChannels;
-        stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-        VkDeviceSize imageSize = texWidth * texHeight * 4;
-
-        mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
-
-        if (!pixels)
-        {
-            throw std::runtime_error("failed to load texture image!");
-        }
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
-        memcpy(data, pixels, static_cast<size_t>(imageSize));
-        vkUnmapMemory(device, stagingBufferMemory);
-
-        stbi_image_free(pixels);
-
-        createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
-
-        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
-        copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-
-        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-    }
-
-    void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels)
-    {
-        VkFormatProperties formatProperties;
-        vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, &formatProperties);
-
-        if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
-        {
-            throw std::runtime_error("texture image format does not support linear blitting!");
-        }
-
-        VkCommandBuffer commandBuffer = beginSingleTimeCommand();
-
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.image = image;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
-        barrier.subresourceRange.levelCount = 1;
-
-        int32_t mipWidth = texWidth;
-        int32_t mipHeight = texHeight;
-
-        for (uint32_t i = 1; i < mipLevels; i++)
-        {
-            barrier.subresourceRange.baseMipLevel = i - 1;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-            vkCmdPipelineBarrier(commandBuffer,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                                 0, nullptr,
-                                 0, nullptr,
-                                 1, &barrier);
-
-            VkImageBlit blit{};
-            blit.srcOffsets[0] = {0, 0, 0};
-            blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
-            blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            blit.srcSubresource.mipLevel = i - 1;
-            blit.srcSubresource.baseArrayLayer = 0;
-            blit.srcSubresource.layerCount = 1;
-            blit.dstOffsets[0] = {0, 0, 0};
-            blit.dstOffsets[1] = {mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1};
-            blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            blit.dstSubresource.mipLevel = i;
-            blit.dstSubresource.baseArrayLayer = 0;
-            blit.dstSubresource.layerCount = 1;
-
-            vkCmdBlitImage(commandBuffer,
-                           image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                           1, &blit,
-                           VK_FILTER_LINEAR);
-
-            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            
-            vkCmdPipelineBarrier(commandBuffer,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                                 0, nullptr,
-                                 0, nullptr,
-                                 1, &barrier);
-
-            if (mipWidth > 1) mipWidth /= 2;
-            if (mipHeight > 1) mipHeight /= 2;
-        }
-
-        barrier.subresourceRange.baseMipLevel = mipLevels - 1;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(commandBuffer,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                             0, nullptr,
-                             0, nullptr,
-                             1, &barrier);
-
-        endSingleTimeCommand(commandBuffer);
-    }
-
     void createImage(uint32_t texWidth, uint32_t texHeight, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory)
     {
         VkImageCreateInfo imageInfo{};
@@ -1296,7 +1183,7 @@ private:
 
         if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS)
         {
-            throw std::runtime_error("failed to create texture image!");
+            throw std::runtime_error("failed to create image!");
         }
 
         VkMemoryRequirements memRequirements;
@@ -1309,7 +1196,7 @@ private:
 
         if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS)
         {
-            throw std::runtime_error("failed to allocate texture image memory!");
+            throw std::runtime_error("failed to allocate image memory!");
         }
 
         vkBindImageMemory(device, image, imageMemory, 0);
@@ -1439,38 +1326,6 @@ private:
         endSingleTimeCommand(commandBuffer);
     }
 
-    void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height)
-    {
-        VkCommandBuffer commandBuffer = beginSingleTimeCommand();
-
-        VkBufferImageCopy region{};
-        region.bufferOffset = 0;
-        region.bufferRowLength = 0;
-        region.bufferImageHeight = 0;
-        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        region.imageSubresource.mipLevel = 0;
-        region.imageSubresource.baseArrayLayer = 0;
-        region.imageSubresource.layerCount = 1;
-        region.imageOffset = { 0, 0, 0 };
-        region.imageExtent = { width, height, 1 };
-
-        vkCmdCopyBufferToImage(
-            commandBuffer,
-            buffer,
-            image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &region
-        );
-
-        endSingleTimeCommand(commandBuffer);
-    }
-
-    void createTextureImageView()
-    {
-        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
-    }
-
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels)
     {
         VkImageViewCreateInfo viewInfo{};
@@ -1498,79 +1353,182 @@ private:
         return imageView;
     }
 
-    void createTextureSampler()
-    {
-        VkSamplerCreateInfo samplerInfo{};
-        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        samplerInfo.magFilter = VK_FILTER_LINEAR;
-        samplerInfo.minFilter = VK_FILTER_LINEAR;
-        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.anisotropyEnable = VK_TRUE;
-        samplerInfo.maxAnisotropy = 16;
-        samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-        samplerInfo.unnormalizedCoordinates = VK_FALSE;
-        samplerInfo.compareEnable = VK_FALSE;
-        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        samplerInfo.mipLodBias = 0.0f;
-        samplerInfo.minLod = 0.0f;
-        samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
-
-        if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create texture sampler!");
-        }
-    }
-
     void loadModel()
     {
-        tinyobj::attrib_t attrib;
-        std::vector<tinyobj::shape_t> shapes;
-        std::vector<tinyobj::material_t> materials;
-        std::unordered_map<Vertex, uint32_t> uniqueVertices{};
-        std::string err;
-
-        if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, MODEL_PATH.c_str()))
-        {
-            throw std::runtime_error(err);
+        std::ifstream file(MODEL_PATH);
+        if (!file.is_open()) {
+            throw std::runtime_error("failed to open .byu file!");
         }
 
-        for (const auto& shape : shapes)
-        {            
-            for (const auto& index : shape.mesh.indices)
-            {
-                if (index.texcoord_index < 0 || attrib.texcoords.empty()) {
-                    continue;
+        int nParts, nPoints;
+        file >> nParts >> nPoints;
+
+        std::vector<glm::vec3> rawVertices(nPoints); 
+        std::vector<glm::vec3> vertexNormals(nPoints, glm::vec3(0.0f));
+         
+        for (int i = 0; i < nPoints; ++i) {
+            file >> rawVertices[i].x >> rawVertices[i].y >> rawVertices[i].z;
+        }
+
+        std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+        std::vector<int> currentTriangle;
+        int idx;
+         
+        while (file >> idx) { 
+            currentTriangle.push_back(std::abs(idx) - 1); 
+            
+            if (currentTriangle.size() == 3) { 
+                uint32_t i0 = currentTriangle[0];
+                uint32_t i1 = currentTriangle[2];  
+                uint32_t i2 = currentTriangle[1]; 
+ 
+                glm::vec3 v0 = rawVertices[i0];
+                glm::vec3 v1 = rawVertices[i1];
+                glm::vec3 v2 = rawVertices[i2];
+                
+                glm::vec3 edge1 = v1 - v0;
+                glm::vec3 edge2 = v2 - v0;
+                 
+                glm::vec3 faceNormal = glm::cross(edge1, edge2);
+                 
+                if (glm::length(faceNormal) > 0.00001f) {
+                    faceNormal = glm::normalize(faceNormal);
+                    
+                    vertexNormals[i0] += faceNormal;
+                    vertexNormals[i1] += faceNormal;
+                    vertexNormals[i2] += faceNormal;
+                }
+ 
+                for (uint32_t vertIdx : {i0, i1, i2}) {
+                    Vertex v{};
+                    v.pos = rawVertices[vertIdx];
+                     
+                    glm::vec3 finalNormal = vertexNormals[vertIdx];
+                    if (glm::length(finalNormal) > 0.00001f) {
+                        v.normal = glm::normalize(finalNormal);
+                    } else {
+                        v.normal = glm::vec3(0.0f, 1.0f, 0.0f);  
+                    }
+
+                    if (uniqueVertices.count(v) == 0) {
+                        uniqueVertices[v] = static_cast<uint32_t>(vertices.size());
+                        vertices.push_back(v);
+                    }
+                    indices.push_back(uniqueVertices[v]);
                 }
                 
-                Vertex vertex{};
-
-                vertex.pos = {
-                    attrib.vertices[3 * index.vertex_index + 0],
-                    attrib.vertices[3 * index.vertex_index + 1],
-                    attrib.vertices[3 * index.vertex_index + 2]
-                };
-
-                vertex.texCoord = {
-                    attrib.texcoords[2 * index.texcoord_index + 0],
-                    1 - attrib.texcoords[2 * index.texcoord_index + 1]
-                };
-
-                vertex.color = {1.0f, 1.0f, 1.0f};
-
-                if (uniqueVertices.count(vertex) == 0)
-                {
-                    uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
-                    vertices.push_back(vertex);
-                }
-
-                indices.push_back(uniqueVertices[vertex]);
+                currentTriangle.clear();
             }
         }
+        file.close();
     }
 
+    void loadParameters()
+    {
+        std::vector<std::string> configPaths = 
+        {
+            "config/camera_light.txt",
+            "../config/camera_light.txt",
+            "../../config/camera_light.txt"
+        };
+        
+        std::ifstream file;
+        for (const auto& path : configPaths) 
+        {
+            file.open(path);
+            if (file.is_open()) break;
+        }
+        
+        if (!file.is_open())
+        {
+            std::cerr << "Warning: failed to open config/camera_light.txt, using defaults" << std::endl;
+            return;
+        }
+
+        auto readNextValue = [&file]() -> std::string 
+        {
+            std::string line;
+            while (std::getline(file, line)) 
+            {
+                
+                size_t commentPos = line.find('#');
+                if (commentPos != std::string::npos) {
+                    line = line.substr(0, commentPos);
+                } 
+
+                size_t start = line.find_first_not_of(" \t\r\n");
+                if (start != std::string::npos) {
+                    return line.substr(start);
+                }
+            }
+            return "";
+        };
+
+        try 
+        { 
+            std::istringstream iss(readNextValue());
+            iss >> cameraParams.C.x >> cameraParams.C.y >> cameraParams.C.z;
+             
+            iss.str(readNextValue()); iss.clear();
+            iss >> cameraParams.N.x >> cameraParams.N.y >> cameraParams.N.z;
+            cameraParams.N = glm::normalize(cameraParams.N);
+             
+            iss.str(readNextValue()); iss.clear();
+            iss >> cameraParams.V.x >> cameraParams.V.y >> cameraParams.V.z;
+            cameraParams.V = glm::normalize(cameraParams.V);
+             
+            iss.str(readNextValue()); iss.clear();
+            iss >> cameraParams.fovy;
+            iss.str(readNextValue()); iss.clear();
+            iss >> cameraParams.aspect;
+            iss.str(readNextValue()); iss.clear();
+            iss >> cameraParams.near;
+            iss.str(readNextValue()); iss.clear();
+            iss >> cameraParams.far;
+             
+            iss.str(readNextValue()); iss.clear();
+            iss >> lightParams.position.x >> lightParams.position.y >> lightParams.position.z;
+             
+            iss.str(readNextValue()); iss.clear();
+            iss >> lightParams.ambient.r >> lightParams.ambient.g >> lightParams.ambient.b >> lightParams.ambient.a;
+            iss.str(readNextValue()); iss.clear();
+            iss >> lightParams.diffuse.r >> lightParams.diffuse.g >> lightParams.diffuse.b >> lightParams.diffuse.a;
+            iss.str(readNextValue()); iss.clear();
+            iss >> lightParams.specular.r >> lightParams.specular.g >> lightParams.specular.b >> lightParams.specular.a;
+             
+            iss.str(readNextValue()); iss.clear();
+            iss >> materialParams.ambient.r >> materialParams.ambient.g >> materialParams.ambient.b >> materialParams.ambient.a;
+            iss.str(readNextValue()); iss.clear();
+            iss >> materialParams.diffuse.r >> materialParams.diffuse.g >> materialParams.diffuse.b >> materialParams.diffuse.a;
+            iss.str(readNextValue()); iss.clear();
+            iss >> materialParams.specular.r >> materialParams.specular.g >> materialParams.specular.b >> materialParams.specular.a;
+             
+            iss.str(readNextValue()); iss.clear();
+            iss >> materialParams.shininess;
+            
+            file.close();
+             
+            static bool firstLoad = true;
+            if (firstLoad) 
+            {
+                cameraPos = cameraParams.C;
+                cameraFront = glm::normalize(cameraParams.N);
+                cameraUp = glm::vec3(0.0f, 1.0f, 0.0f); 
+                yaw = -90.0f;
+                pitch = 0.0f;
+                firstLoad = false;
+            }
+            
+            std::cerr << "Parameters loaded successfully:" << std::endl;
+            std::cerr << "  Camera C: (" << cameraParams.C.x << ", " << cameraParams.C.y << ", " << cameraParams.C.z << ")" << std::endl;
+            std::cerr << "  Light position: (" << lightParams.position.x << ", " << lightParams.position.y << ", " << lightParams.position.z << ")" << std::endl;
+            std::cerr << "  Shininess: " << materialParams.shininess << std::endl;
+        } 
+        catch (const std::exception& e) 
+        {
+            std::cerr << "Error loading parameters: " << e.what() << std::endl;
+        }
+    }
     void createVertexBuffer()
     {
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
@@ -1582,7 +1540,7 @@ private:
 
         void* data;
         vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, vertices.data(), bufferSize);
+        memcpy(data, vertices.data(), (size_t)bufferSize);
         vkUnmapMemory(device, stagingBufferMemory);
 
         createBuffer(bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
@@ -1623,6 +1581,7 @@ private:
 
         VkMemoryRequirements memRequirements;
         vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
+        
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memRequirements.size;
@@ -1661,7 +1620,7 @@ private:
 
         void* data;
         vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, indices.data(), bufferSize);
+        memcpy(data, indices.data(), (size_t)bufferSize);
         vkUnmapMemory(device, stagingBufferMemory);
 
         createBuffer(bufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
@@ -1689,11 +1648,9 @@ private:
 
     void createDescriptorPool()
     {
-        std::array<VkDescriptorPoolSize,2> poolSizes{};
+        std::array<VkDescriptorPoolSize,1> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
-        poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1729,12 +1686,8 @@ private:
             bufferInfo.offset = 0;
             bufferInfo.range = sizeof(UniformBufferObject);
 
-            VkDescriptorImageInfo imageInfo{};
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfo.imageView = textureImageView;
-            imageInfo.sampler = textureSampler;
-
-            std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+            std::array<VkWriteDescriptorSet, 1> descriptorWrites{};
+            
             descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             descriptorWrites[0].dstSet = descriptorSets[i];
             descriptorWrites[0].dstBinding = 0;
@@ -1744,16 +1697,6 @@ private:
             descriptorWrites[0].pBufferInfo = &bufferInfo;
             descriptorWrites[0].pImageInfo = nullptr;
             descriptorWrites[0].pTexelBufferView = nullptr;
-
-            descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrites[1].dstSet = descriptorSets[i];
-            descriptorWrites[1].dstBinding = 1;
-            descriptorWrites[1].dstArrayElement = 0;
-            descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            descriptorWrites[1].descriptorCount = 1;
-            descriptorWrites[1].pBufferInfo = nullptr;
-            descriptorWrites[1].pImageInfo = &imageInfo;
-            descriptorWrites[1].pTexelBufferView = nullptr;
 
             vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
         }
@@ -1808,10 +1751,11 @@ private:
             lastX = xpos;
             lastY = ypos;
             firstMouse = false;
+            return;
         }
 
         float xoffset = xpos - lastX;
-        float yoffset = lastY - ypos; 
+        float yoffset = lastY - ypos;
         lastX = xpos;
         lastY = ypos;
 
@@ -1826,38 +1770,53 @@ private:
         if (pitch < -89.0f)
             pitch = -89.0f;
 
-        glm::vec3 front;
-        front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-        front.y = sin(glm::radians(pitch));
-        front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-        cameraFront = glm::normalize(front);
+        glm::vec3 direction;
+        direction.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+        direction.y = sin(glm::radians(pitch));
+        direction.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        cameraFront = glm::normalize(direction);
     }
 
     void processInput() 
     {
         float cameraSpeed = CAMERA_SPEED * deltaTime;
 
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
             cameraPos += cameraSpeed * cameraFront;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        }
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
             cameraPos -= cameraSpeed * cameraFront;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+        }
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+            glm::vec3 right = glm::normalize(glm::cross(cameraFront, cameraUp));
+            cameraPos -= cameraSpeed * right;
+        }
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+            glm::vec3 right = glm::normalize(glm::cross(cameraFront, cameraUp));
+            cameraPos += cameraSpeed * right;
+        }
         if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
             cameraPos += cameraSpeed * cameraUp;
         if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
             cameraPos -= cameraSpeed * cameraUp;
+         
+        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+        {
+            static float lastReloadTime = 0.0f;
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            static auto lastReloadSystemTime = currentTime;
+            float timeSinceLastReload = std::chrono::duration<float>(currentTime - lastReloadSystemTime).count();
+            
+            if (timeSinceLastReload > 0.3f)  
+            {
+                std::cerr << "\n=== Reloading parameters ===" << std::endl;
+                loadParameters();
+                lastReloadSystemTime = currentTime;
+            }
+        }
             
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(window, true);
-            
-        // Pressionar '2' para mudar para compute
-        if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) {
-            switchToCompute = true;
-            glfwSetWindowShouldClose(window, true);
-        }
     }
 
 #pragma endregion
@@ -1880,13 +1839,6 @@ private:
         }
 
         vkDeviceWaitIdle(device);
-        
-        // Se foi pressionado '2', executar compute
-        if (switchToCompute) {
-            std::cout << "Mudando para Compute..." << std::endl;
-            cleanup(); // Limpar recursos antes de trocar
-            compute();
-        }
     }
 
     void drawFrame()
@@ -2033,22 +1985,35 @@ private:
 
     void updateUniformBuffer(uint32_t currentImage)
     {
-        static auto startTime = std::chrono::high_resolution_clock::now();
-
-        auto currentTime = std::chrono::high_resolution_clock::now();
-        float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-
         UniformBufferObject ubo{};
-        glm::mat4 modelMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)); 
-        modelMatrix = glm::rotate(modelMatrix, time * 0.05f * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)); 
+         
+        glm::mat4 modelMatrix = glm::mat4(1.0f);  
+        modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, -250.0f, 0.0f));
         ubo.model = modelMatrix;
-        ubo.view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-        ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 100.0f);
-        ubo.proj[1][1] *= -1;
+         
+        glm::vec3 camPos = cameraPos; 
+        ubo.view = glm::lookAt(camPos, camPos + cameraFront, cameraUp);
+        
+        float currentAspect = swapChainExtent.width / (float)swapChainExtent.height;
+        ubo.proj = glm::perspective(glm::radians(cameraParams.fovy), currentAspect, cameraParams.near, cameraParams.far);
+        ubo.proj[1][1] *= -1; 
+         
+        ubo.lightPos = lightParams.position;
+        ubo.viewPos = camPos;
+         
+        float intensity = 5.0f; 
+
+        ubo.lightAmbient = lightParams.ambient * 2.0f; 
+        ubo.lightDiffuse = lightParams.diffuse * intensity;
+        ubo.lightSpecular = lightParams.specular * intensity;
+        
+        ubo.matAmbient = materialParams.ambient;
+        ubo.matDiffuse = materialParams.diffuse;
+        ubo.matSpecular = materialParams.specular;
+        ubo.shininess = materialParams.shininess;
 
         memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
     }
-
 #pragma endregion
 
 #pragma region Cleanup()
@@ -2077,11 +2042,6 @@ private:
     void cleanup()
     {
         cleanupSwapChain();
-
-        vkDestroySampler(device, textureSampler, nullptr);
-        vkDestroyImageView(device, textureImageView, nullptr);
-        vkDestroyImage(device, textureImage, nullptr);
-        vkFreeMemory(device, textureImageMemory, nullptr);
 
         for (size_t i = 0; i < swapChainImages.size(); i++) {
             vkDestroyBuffer(device, uniformBuffers[i], nullptr);
