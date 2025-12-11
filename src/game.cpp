@@ -880,7 +880,7 @@ private:
         uboLayoutBinding.binding = 0;
         uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uboLayoutBinding.descriptorCount = 1;
-        uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         uboLayoutBinding.pImmutableSamplers = nullptr;
 
         VkDescriptorSetLayoutBinding bindings[] = {uboLayoutBinding};
@@ -1363,64 +1363,80 @@ private:
         int nParts, nPoints;
         file >> nParts >> nPoints;
 
-        std::vector<glm::vec3> rawVertices(nPoints); 
-        std::vector<glm::vec3> vertexNormals(nPoints, glm::vec3(0.0f));
-         
+        // 1. Leitura dos Vértices Brutos
+        std::vector<glm::vec3> rawVertices(nPoints);
+        // Inicializa as normais com zero para acumular depois
+        std::vector<glm::vec3> accumNormals(nPoints, glm::vec3(0.0f));
+
         for (int i = 0; i < nPoints; ++i) {
             file >> rawVertices[i].x >> rawVertices[i].y >> rawVertices[i].z;
         }
 
-        std::unordered_map<Vertex, uint32_t> uniqueVertices{};
-        std::vector<int> currentTriangle;
+        // 2. Leitura dos Índices (Topologia)
+        // Armazenamos todos os índices primeiro para processar as normais corretamente depois
+        std::vector<uint32_t> rawIndices;
         int idx;
-         
-        while (file >> idx) { 
-            currentTriangle.push_back(std::abs(idx) - 1); 
-            
-            if (currentTriangle.size() == 3) { 
-                uint32_t i0 = currentTriangle[0];
-                uint32_t i1 = currentTriangle[2];  
-                uint32_t i2 = currentTriangle[1]; 
- 
-                glm::vec3 v0 = rawVertices[i0];
-                glm::vec3 v1 = rawVertices[i1];
-                glm::vec3 v2 = rawVertices[i2];
-                
-                glm::vec3 edge1 = v1 - v0;
-                glm::vec3 edge2 = v2 - v0;
-                 
-                glm::vec3 faceNormal = glm::cross(edge1, edge2);
-                 
-                if (glm::length(faceNormal) > 0.00001f) {
-                    faceNormal = glm::normalize(faceNormal);
-                    
-                    vertexNormals[i0] += faceNormal;
-                    vertexNormals[i1] += faceNormal;
-                    vertexNormals[i2] += faceNormal;
-                }
- 
-                for (uint32_t vertIdx : {i0, i1, i2}) {
-                    Vertex v{};
-                    v.pos = rawVertices[vertIdx];
-                     
-                    glm::vec3 finalNormal = vertexNormals[vertIdx];
-                    if (glm::length(finalNormal) > 0.00001f) {
-                        v.normal = glm::normalize(finalNormal);
-                    } else {
-                        v.normal = glm::vec3(0.0f, 1.0f, 0.0f);  
-                    }
-
-                    if (uniqueVertices.count(v) == 0) {
-                        uniqueVertices[v] = static_cast<uint32_t>(vertices.size());
-                        vertices.push_back(v);
-                    }
-                    indices.push_back(uniqueVertices[v]);
-                }
-                
-                currentTriangle.clear();
-            }
+        
+        // Ler todos os índices do arquivo
+        while (file >> idx) {
+            rawIndices.push_back(std::abs(idx) - 1);
         }
         file.close();
+
+        // Verificação de segurança: precisamos de múltiplos de 3 para formar triângulos
+        if (rawIndices.size() % 3 != 0) {
+            throw std::runtime_error("Error: The file does not have a topology compatible with triangles (indices count is not divisible by 3).");
+        }
+
+        // 3. Passo de Cálculo das Normais (Acumulação)
+        for (size_t i = 0; i < rawIndices.size(); i += 3) {
+            uint32_t i0 = rawIndices[i];
+            uint32_t i1 = rawIndices[i + 1]; // CORREÇÃO: Ordem sequencial (1)
+            uint32_t i2 = rawIndices[i + 2]; // CORREÇÃO: Ordem sequencial (2)
+
+            glm::vec3 v0 = rawVertices[i0];
+            glm::vec3 v1 = rawVertices[i1];
+            glm::vec3 v2 = rawVertices[i2];
+
+            glm::vec3 edge1 = v1 - v0;
+            glm::vec3 edge2 = v2 - v0;
+
+            // Cross product para achar a normal da face
+            // Se ainda estiver invertido (preto), troque para: glm::cross(edge2, edge1)
+            glm::vec3 faceNormal = glm::cross(edge1, edge2);
+
+            // Acumula a normal da face em cada vértice participante
+            // Não normalizamos aqui ainda, para que faces maiores tenham mais "peso" (opcional)
+            // ou você pode normalizar faceNormal aqui se quiser peso igual por face.
+            accumNormals[i0] += faceNormal;
+            accumNormals[i1] += faceNormal;
+            accumNormals[i2] += faceNormal;
+        }
+
+        // 4. Montagem Final dos Vértices (Normalização e Preenchimento)
+        vertices.clear();
+        vertices.reserve(nPoints);
+
+        for (int i = 0; i < nPoints; ++i) {
+            Vertex v{};
+            v.pos = rawVertices[i];
+
+            // Normaliza a soma das normais de todas as faces adjacentes
+            if (glm::length(accumNormals[i]) > 0.00001f) {
+                v.normal = glm::normalize(accumNormals[i]);
+            } else {
+                v.normal = glm::vec3(0.0f, 1.0f, 0.0f); // Fallback
+            }
+            
+            // Opcional: Se tiver cor ou textura, defina aqui
+            // v.color = ...
+            // v.texCoord = ...
+
+            vertices.push_back(v);
+        }
+
+        // Copia os índices brutos para o buffer de índices final do Vulkan
+        indices = std::move(rawIndices);
     }
 
     void loadParameters()
