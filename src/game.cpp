@@ -1390,21 +1390,17 @@ private:
         int nConns = 0;
 
         if (headerInts.size() == 2)
-        {
-            // Project's variant: "nVerts nTris" then nVerts vertex lines, then triangles as 1-based triplets.
+        { 
             nVerts = headerInts[0];
             expectedTriangles = headerInts[1];
         }
         else
-        {
-            // MOVIE.BYU classic: "nParts nVerts nPolys nConns" + part ranges, vertices, then connectivity with negatives.
+        { 
             nParts = headerInts[0];
             nVerts = headerInts[1];
             nPolys = headerInts[2];
             nConns = headerInts[3];
-
-            // Most MOVIE.BYU files provide 2 integers per part (start/end polygon indices).
-            // We don't need these ranges for rendering, but we must consume them to align the stream.
+ 
             for (int i = 0; i < nParts; ++i)
             {
                 int startPoly = 0;
