@@ -26,11 +26,9 @@ void main()
     vec3 N = normalize(fragNormalView);
     vec3 V = normalize(-fragPosView);
     vec3 L = normalize(ubo.lightPos - fragPosView);  
- 
-    // Alfa do material ambiente define a opacidade base (sólida)
+  
     float baseOpacity = ubo.matAmbient.a;
-    
-    // Alfas de diffuse/specular modulam apenas a intensidade de seus termos
+     
     float intensityAmbient = ubo.lightAmbient.a;
     float intensityDiffuse = ubo.lightDiffuse.a * ubo.matDiffuse.a;
     float intensitySpecular = ubo.lightSpecular.a * ubo.matSpecular.a;
@@ -48,8 +46,7 @@ void main()
     }
 
     vec3 finalColor = ambient + diffuse + specular;
-
-    // Opacidade final = alfa ambiente (não depende de diffuse/specular)
+ 
     outColor = vec4(finalColor, baseOpacity);
 }
 
