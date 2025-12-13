@@ -2139,7 +2139,8 @@ private:
         ubo.proj = glm::perspective(glm::radians(cameraParams.fovy), currentAspect, cameraParams.near, cameraParams.far);
         ubo.proj[1][1] *= -1; 
          
-        ubo.lightPos = lightParams.position;
+        glm::vec3 lightPosView = glm::vec3(ubo.view * glm::vec4(lightParams.position, 1.0f));
+        ubo.lightPos = lightPosView;
         ubo.viewPos = camPos;
 
         ubo.lightAmbient = lightParams.ambient;
