@@ -975,11 +975,15 @@ private:
         colorBlending.blendConstants[2] = 0.0f;
         colorBlending.blendConstants[3] = 0.0f;
 
+        // Z-Buffer Implementation (Depth Testing)
+        // Requirement: REQ-04 - Algorithm of visibility z-buffering
+        // The depth test ensures correct visibility ordering: fragments closer to the camera
+        // overwrite those further away, preventing visual artifacts from incorrect depth ordering.
         VkPipelineDepthStencilStateCreateInfo depthStencil{};
         depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        depthStencil.depthTestEnable = VK_TRUE;
-        depthStencil.depthWriteEnable = VK_TRUE;
-        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        depthStencil.depthTestEnable = VK_TRUE;        // Enable Z-buffer depth testing
+        depthStencil.depthWriteEnable = VK_TRUE;       // Write depth values to depth buffer
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;  // Keep fragment if depth < stored depth
         depthStencil.depthBoundsTestEnable = VK_FALSE;
         depthStencil.minDepthBounds = 0.0f;
         depthStencil.maxDepthBounds = 1.0f;
@@ -1652,7 +1656,7 @@ private:
             {
                 cameraPos = cameraParams.C;
                 cameraFront = glm::normalize(cameraParams.N);
-                cameraUp = glm::vec3(0.0f, 1.0f, 0.0f); 
+                cameraUp = glm::normalize(cameraParams.V);  // Use V vector from configuration file
                 yaw = -90.0f;
                 pitch = 0.0f;
                 firstLoad = false;
@@ -2128,7 +2132,7 @@ private:
         UniformBufferObject ubo{};
          
         glm::mat4 modelMatrix = glm::mat4(1.0f);  
-        //modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, -250.0f, 0.0f)); 
+        
         modelMatrix = glm::rotate(modelMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f)); 
         ubo.model = modelMatrix;
          
@@ -2141,12 +2145,10 @@ private:
          
         ubo.lightPos = lightParams.position;
         ubo.viewPos = camPos;
-         
-        float intensity = 5.0f; 
 
-        ubo.lightAmbient = lightParams.ambient * 2.0f; 
-        ubo.lightDiffuse = lightParams.diffuse * intensity;
-        ubo.lightSpecular = lightParams.specular * intensity;
+        ubo.lightAmbient = lightParams.ambient;
+        ubo.lightDiffuse = lightParams.diffuse;
+        ubo.lightSpecular = lightParams.specular;
         
         ubo.matAmbient = materialParams.ambient;
         ubo.matDiffuse = materialParams.diffuse;

@@ -35,8 +35,11 @@ void main()
  
     vec3 specular = vec3(0.0);
     if (diff > 0.0) {
-        vec3 H = normalize(L + V); 
-        float spec = pow(max(dot(N, H), 0.0), ubo.shininess);
+        // Phong Illumination Model: Specular term using Reflection vector
+        // R = reflect(-L, N) calculates the reflection of incoming light
+        // Specular intensity depends on alignment of R with View direction V
+        vec3 R = reflect(-L, N);
+        float spec = pow(max(dot(R, V), 0.0), ubo.shininess);
         specular = ubo.lightSpecular.rgb * (ubo.matSpecular.rgb * spec);
     }
 
