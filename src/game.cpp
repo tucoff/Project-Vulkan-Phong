@@ -974,11 +974,7 @@ private:
         colorBlending.blendConstants[1] = 0.0f;
         colorBlending.blendConstants[2] = 0.0f;
         colorBlending.blendConstants[3] = 0.0f;
-
-        // Z-Buffer Implementation (Depth Testing)
-        // Requirement: REQ-04 - Algorithm of visibility z-buffering
-        // The depth test ensures correct visibility ordering: fragments closer to the camera
-        // overwrite those further away, preventing visual artifacts from incorrect depth ordering.
+ 
         VkPipelineDepthStencilStateCreateInfo depthStencil{};
         depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         depthStencil.depthTestEnable = VK_TRUE;        // Enable Z-buffer depth testing
